@@ -34,7 +34,7 @@ button.danger{color:var(--bad)}
 .item{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-top:1px solid var(--line);cursor:pointer}
 .item:first-child{border-top:0}
 .item b{display:block}
-.item span{color:var(--mute);font-size:.9rem;white-space:nowrap}
+.grp{border-top:1px solid var(--line);padding:10px 0}.code{display:inline-flex;gap:6px;align-items:center;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 8px;margin:2px 4px 2px 0;font-size:.9rem}.code button{padding:0 4px;border:0;background:none;color:var(--bad)}.item span{color:var(--mute);font-size:.9rem;white-space:nowrap}
 video{width:100%;max-height:300px;background:#000;border-radius:8px;margin-top:10px}
 #toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;opacity:0;pointer-events:none;transition:opacity .2s}
 #toast.on{opacity:1}
@@ -48,6 +48,7 @@ video{width:100%;max-height:300px;background:#000;border-radius:8px;margin-top:1
     <input id="code" inputmode="numeric" autocomplete="off" placeholder="Штрихкод: отсканируйте или введите" autofocus>
     <button class="main" id="go">Найти</button>
     <button id="cam">Камера</button>
+    <button id="photo">Фото стопки</button><input type="file" id="pfile" accept="image/*" multiple hidden>
   </div>
   <video id="video" playsinline muted hidden></video>
   <p class="hint">USB-сканер работает как клавиатура: наведите курсор в поле и сканируйте. Онлайн-поиск <label><input type="checkbox" id="onl" checked> включён</label></p>
@@ -59,6 +60,19 @@ video{width:100%;max-height:300px;background:#000;border-radius:8px;margin-top:1
 </details>
 
 <div id="result"></div>
+<div id="batch"></div>
+
+<div class="panel">
+  <h2>Приёмка: <span id="itot">0</span></h2>
+  <div id="ilist"></div>
+  <div class="row" style="margin-top:8px"><button id="icopy">Скопировать список</button><button id="iclr" class="danger">Очистить</button></div>
+</div>
+
+<details class="panel" id="dp"><summary>Контроль дублей</summary>
+  <div class="row" style="margin-top:10px"><select id="dmode"><option value="s">Строгие совпадения</option><option value="f">Похожие (без скобок)</option></select><button id="dfind" class="main">Найти дубли</button><button id="dall" hidden>Объединить все</button></div>
+  <p class="hint">Дубль: одинаковое название и платформа у разных записей. Объединение собирает все штрихкоды в одну игру.</p>
+  <div id="dups"></div>
+</details>
 
 <div class="panel">
   <h2>Ваша база: <span id="count">0</span></h2>
@@ -73,53 +87,117 @@ video{width:100%;max-height:300px;background:#000;border-radius:8px;margin-top:1
 <div id="toast"></div>
 
 <script>
-const KEY='gamedb_v1';
+const KEY='gamedb_v2',OLD='gamedb_v1',PK='gamedb_proxy';
 const PLATFORMS=['PlayStation 1','PlayStation 2','PlayStation 3','PlayStation 4','PlayStation 5','PS Vita','PSP','Xbox','Xbox 360','Xbox One','Xbox Series X','Nintendo Switch','Nintendo Switch 2','Wii','Wii U','GameCube','Nintendo 64','SNES','NES','Nintendo DS','Nintendo 3DS','Game Boy / GBA','Sega','ПК','Другое'];
 const REGIONS=['PAL','NTSC-U (США)','NTSC-J (Япония)','Россия','Другое'];
-const GUESS=[[/switch ?2/i,'Nintendo Switch 2'],[/switch/i,'Nintendo Switch'],[/ps5|playstation ?5/i,'PlayStation 5'],[/ps4|playstation ?4/i,'PlayStation 4'],[/ps3|playstation ?3/i,'PlayStation 3'],[/ps2|playstation ?2/i,'PlayStation 2'],[/xbox series/i,'Xbox Series X'],[/xbox one/i,'Xbox One'],[/xbox 360/i,'Xbox 360'],[/wii u/i,'Wii U'],[/\bwii\b/i,'Wii'],[/3ds/i,'Nintendo 3DS'],[/\bds\b/i,'Nintendo DS'],[/\bpsp\b/i,'PSP'],[/vita/i,'PS Vita'],[/\bpc\b|windows/i,'ПК']];
-
-let db={};
-try{db=JSON.parse(localStorage.getItem(KEY)||'{}')}catch(e){db={}}
-const norm=c=>String(c).replace(/\D/g,'').padStart(14,'0');
-(function(){const n={};Object.values(db).forEach(g=>{n[norm(g.code)]=g});db=n})();
+const GUESS=[[/switch ?2/i,'Nintendo Switch 2'],[/switch/i,'Nintendo Switch'],[/ps5|playstation ?5/i,'PlayStation 5'],[/ps4|playstation ?4/i,'PlayStation 4'],[/ps3|playstation ?3/i,'PlayStation 3'],[/xbox series/i,'Xbox Series X'],[/xbox one/i,'Xbox One'],[/xbox 360/i,'Xbox 360'],[/wii u/i,'Wii U'],[/\bwii\b/i,'Wii'],[/3ds/i,'Nintendo 3DS'],[/\bds\b/i,'Nintendo DS'],[/\bpsp\b/i,'PSP'],[/vita/i,'PS Vita'],[/\bpc\b|windows/i,'ПК']];
 const $=id=>document.getElementById(id);
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-function persist(){try{localStorage.setItem(KEY,JSON.stringify(db))}catch(e){toast('Не удалось сохранить в браузере')}}
-function toast(t){const e=$('toast');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),2500)}
-function find(c){return db[norm(c)]||null}
-function guess(t){for(const [r,p] of GUESS)if(r.test(t||''))return p;return ''}
+const norm=c=>String(c).replace(/\D/g,'').padStart(14,'0');
+const uid=()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-3);
 const opts=(a,sel)=>a.map(x=>`<option${x===sel?' selected':''}>${esc(x)}</option>`).join('');
+function toast(t){const e=$('toast');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),2800)}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(D));return true}catch(e){toast('Не удалось сохранить: место в браузере закончилось');return false}}
 
-function showFound(g){
-  $('result').innerHTML=`<div class="panel found"><div class="status ok">Найдено в вашей базе</div>
+let D=null,migrated=false;
+try{D=JSON.parse(localStorage.getItem(KEY));if(!D||!D.games)throw 0}catch(e){
+  D={games:{},codes:{},ignore:{}};migrated=true;
+  try{Object.values(JSON.parse(localStorage.getItem(OLD)||'{}')).forEach(x=>{const id=uid();D.games[id]={id,title:x.title,platform:x.platform,region:x.region,note:x.note||'',added:x.added||'',codes:[x.code]};D.codes[norm(x.code)]=id})}catch(e2){}
+}
+D.ignore=D.ignore||{};
+if(migrated&&persist()){try{localStorage.removeItem(OLD)}catch(e){}}
+
+const gameOf=c=>D.games[D.codes[norm(c)]]||null;
+const hasCode=(g,c)=>g.codes.some(x=>norm(x)===norm(c));
+function attach(g,code){ // привязать код к игре (с переносом, если был у другой)
+  const k=norm(code),old=D.games[D.codes[k]];
+  if(old&&old.id!==g.id)old.codes=old.codes.filter(x=>norm(x)!==k);
+  D.codes[k]=g.id;if(!hasCode(g,code))g.codes.push(String(code).replace(/\D/g,''));
+}
+function detach(g,code){const k=norm(code);g.codes=g.codes.filter(x=>norm(x)!==k);if(D.codes[k]===g.id)delete D.codes[k]}
+function removeGame(g){g.codes.forEach(c=>{if(D.codes[norm(c)]===g.id)delete D.codes[norm(c)]});delete D.games[g.id]}
+function merge(list){
+  list=list.slice().sort((a,b)=>b.codes.length-a.codes.length);const t=list[0];
+  list.slice(1).forEach(g=>{
+    g.codes.forEach(c=>attach(t,c));
+    if(g.note&&!(t.note||'').includes(g.note))t.note=[t.note,g.note].filter(Boolean).join('; ');
+    delete D.games[g.id];
+  });return t;
+}
+const strip=t=>t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,'');
+const keyS=g=>strip(g.title)+'|'+g.platform;
+const keyF=g=>strip(g.title.replace(/\([^)]*\)/g,''))+'|'+g.platform;
+function guess(t){for(const [r,p] of GUESS)if(r.test(t||''))return p;return ''}
+
+/* карточка игры */
+function showGame(g,scanned){
+  const codes=g.codes.map(c=>`<span class="code">${esc(c)}${scanned&&norm(c)===norm(scanned)?' ✓':''}<button data-c="${esc(c)}" title="Отвязать код">×</button></span>`).join('')||'<span class="meta">нет штрихкодов</span>';
+  $('result').innerHTML=`<div class="panel found"><div class="status ok">${scanned?'Найдено в вашей базе':'Игра'}</div>
   <div class="title">${esc(g.title)}</div>
   <div class="meta">${esc(g.platform)} · ${esc(g.region)}${g.note?' · '+esc(g.note):''}</div>
-  <div class="meta">Код ${esc(g.code)}</div>
-  <div class="row" style="margin-top:10px"><button id="ed">Изменить</button><button class="danger" id="del">Удалить</button></div></div>`;
-  $('ed').onclick=()=>showForm(g.code,g,'Редактирование','warn');
-  $('del').onclick=()=>{if(confirm('Удалить запись?')){delete db[norm(g.code)];persist();render();$('result').innerHTML='';toast('Удалено')}};
+  <div style="margin-top:8px">${codes}</div>
+  <div class="row" style="margin-top:10px"><input id="nc" inputmode="numeric" placeholder="Добавить штрихкод" style="flex:1 1 150px"><button id="ac">Привязать</button></div>
+  <div class="row" style="margin-top:10px"><button class="main" id="ai">В приёмку</button><button id="ed">Изменить</button><button class="danger" id="del">Удалить игру</button></div></div>`;
+  $('result').querySelectorAll('.code button').forEach(b=>b.onclick=()=>{if(confirm('Отвязать код '+b.dataset.c+'?')){detach(g,b.dataset.c);persist();render();showGame(g)}});
+  $('ac').onclick=()=>{
+    const c=$('nc').value.replace(/\D/g,'');if(c.length<7){toast('Слишком короткий код');return}
+    const o=gameOf(c);
+    if(o&&o.id===g.id){toast('Этот код уже привязан к этой игре');return}
+    if(o&&!confirm('Код уже привязан к «'+o.title+'» ('+o.platform+'). Перенести сюда?'))return;
+    attach(g,c);persist();render();showGame(g);toast('Код привязан');
+  };
+  $('ai').onclick=()=>{addIntake(g,1);toast('Добавлено в приёмку')};
+  $('ed').onclick=()=>showForm(null,g);
+  $('del').onclick=()=>{if(confirm('Удалить игру и все её штрихкоды?')){removeGame(g);persist();render();$('result').innerHTML='';toast('Удалено')}};
 }
-function showForm(code,pre,msg,cls){
-  pre=pre||{};
+
+/* форма новой/редактируемой игры */
+function formHtml(pre){
   const plat=pre.platform||guess(pre.title);
-  $('result').innerHTML=`<div class="panel miss"><div class="status ${cls||'warn'}">${esc(msg)}</div>
-  <div class="meta">Код ${esc(code)}</div>
-  <div class="form">
+  return `<div class="form">
    <label>Название<input id="f_t" value="${esc(pre.title||'')}"></label>
    <label>Платформа<select id="f_p"><option value="">— выберите —</option>${opts(PLATFORMS,plat)}</select></label>
    <label>Регион<select id="f_r">${opts(REGIONS,pre.region||'PAL')}</select></label>
    <label>Заметка (издание, язык, комплектность)<input id="f_n" value="${esc(pre.note||'')}"></label>
-   <div class="row"><button class="main" id="sv">Сохранить в базу</button></div>
-  </div></div>`;
+   <div class="row"><button class="main" id="sv">Сохранить</button></div></div>`;
+}
+function bindForm(code,g){
   $('sv').onclick=()=>{
     const title=$('f_t').value.trim(),platform=$('f_p').value;
     if(!title||!platform){toast('Укажите название и платформу');return}
-    const g={code,title,platform,region:$('f_r').value,note:$('f_n').value.trim(),added:pre.added||new Date().toISOString().slice(0,10)};
-    db[norm(code)]=g;persist();render();showFound(g);toast('Сохранено');$('code').focus();
+    const f={title,platform,region:$('f_r').value,note:$('f_n').value.trim()};
+    if(g){Object.assign(g,f)}
+    else{g=Object.assign({id:uid(),added:new Date().toISOString().slice(0,10),codes:[]},f);D.games[g.id]=g}
+    if(code)attach(g,code);
+    persist();render();showGame(g,code);toast('Сохранено');$('code').focus();
   };
-  $('f_t').focus();
 }
-const PK='gamedb_proxy';
+function showForm(code,g){
+  $('result').innerHTML=`<div class="panel miss"><div class="status warn">Редактирование</div>${formHtml(g||{})}</div>`;
+  bindForm(code,g);$('f_t').focus();
+}
+
+/* код не найден: привязать к существующей или создать новую */
+function showMissing(code,msg,cls,pre){
+  pre=pre||{};
+  $('result').innerHTML=`<div class="panel miss"><div class="status ${cls||'warn'}">${esc(msg)}</div>
+  <div class="meta">Код ${esc(code)}</div>
+  <h2 style="margin-top:12px">Привязать к игре из базы</h2>
+  <div class="row"><input id="b_q" placeholder="Название игры" value="${esc(pre.title||'')}" style="flex:1 1 180px"><select id="b_p"><option value="">Все платформы</option>${opts(PLATFORMS,guess(pre.title))}</select></div>
+  <div id="b_res"></div>
+  <details style="margin-top:10px"${pre.title?' open':''}><summary>Создать новую игру</summary>${formHtml(pre)}</details></div>`;
+  bindForm(code,null);
+  const run=()=>{
+    const toks=$('b_q').value.toLowerCase().split(/\s+/).filter(Boolean),pl=$('b_p').value;
+    if(!toks.length){$('b_res').innerHTML='<p class="hint">Введите часть названия, чтобы найти игру.</p>';return}
+    const v=Object.values(D.games).filter(g=>(!pl||g.platform===pl)&&toks.every(t=>g.title.toLowerCase().includes(t))).sort((a,b)=>a.title.localeCompare(b.title,'ru')).slice(0,25);
+    $('b_res').innerHTML=v.length?v.map(g=>`<div class="item"><div><b>${esc(g.title)}</b><span>${esc(g.platform)}${g.note?' · '+esc(g.note):''} · кодов: ${g.codes.length}</span></div><button data-id="${g.id}" class="main">Привязать</button></div>`).join(''):'<p class="hint">Ничего не найдено. Измените запрос или создайте новую игру.</p>';
+    $('b_res').querySelectorAll('button').forEach(b=>b.onclick=()=>{const g=D.games[b.dataset.id];attach(g,code);persist();render();showGame(g,code);toast('Код привязан');$('code').focus()});
+  };
+  $('b_q').oninput=run;$('b_p').onchange=run;run();
+}
+
+/* онлайн */
 function proxyUrl(){try{return localStorage.getItem(PK)||''}catch(e){return ''}}
 async function online(code){
   const p=proxyUrl();
@@ -133,28 +211,41 @@ async function online(code){
 async function handle(raw){
   const code=String(raw).replace(/\D/g,'');
   $('code').value='';
-  if(code.length<8){toast('Штрихкод слишком короткий');return}
-  const g=find(code);
-  if(g){showFound(g);return}
-  if(!$('onl').checked){showForm(code,{},'Нет в вашей базе. Введите данные вручную.');return}
+  if(code.length<7){toast('Штрихкод слишком короткий');return}
+  const g=gameOf(code);
+  if(g){showGame(g,code);return}
+  if(!$('onl').checked){showMissing(code,'Нет в базе. Привяжите к игре или создайте новую.');return}
   $('result').innerHTML='<div class="panel miss"><div class="status warn">Ищу в онлайн-базе…</div></div>';
   try{
     const t=await online(code);
-    if(t)showForm(code,{title:t},'Найдено онлайн. Проверьте название и платформу.','ok');
-    else showForm(code,{},'Нет ни в вашей базе, ни онлайн. Введите вручную.');
-  }catch(e){
-    showForm(code,{},'Онлайн-поиск недоступен ('+e.message+'). Введите вручную.','bad');
-  }
+    if(t)showMissing(code,'Найдено онлайн. Проверьте и привяжите к игре из базы.','ok',{title:t});
+    else showMissing(code,'Нет ни в вашей базе, ни онлайн.');
+  }catch(e){showMissing(code,'Онлайн-поиск недоступен ('+e.message+').','bad')}
 }
 
+/* список */
 function render(){
   const q=$('q').value.trim().toLowerCase();
-  const all=Object.values(db).sort((a,b)=>a.title.localeCompare(b.title,'ru'));
-  $('count').textContent=all.length;
-  const v=all.filter(g=>!q||(g.title+' '+g.platform+' '+g.code).toLowerCase().includes(q)).slice(0,200);
-  $('list').innerHTML=v.length?v.map(g=>`<div class="item" data-c="${esc(g.code)}"><div><b>${esc(g.title)}</b><span>${esc(g.code)}</span></div><span>${esc(g.platform)}</span></div>`).join(''):'<p class="hint">Пока пусто. Отсканируйте первую игру.</p>';
-  $('list').querySelectorAll('.item').forEach(e=>e.onclick=()=>{showFound(db[norm(e.dataset.c)]);scrollTo(0,0)});
+  const all=Object.values(D.games).sort((a,b)=>a.title.localeCompare(b.title,'ru'));
+  $('count').textContent=all.length+' игр, '+Object.keys(D.codes).length+' кодов';
+  const v=all.filter(g=>!q||(g.title+' '+g.platform+' '+g.codes.join(' ')).toLowerCase().includes(q)).slice(0,200);
+  $('list').innerHTML=v.length?v.map(g=>`<div class="item" data-id="${g.id}"><div><b>${esc(g.title)}</b><span>${esc(g.platform)}${g.note?' · '+esc(g.note):''}</span></div><span>${g.codes.length>1?g.codes.length+' кода':esc(g.codes[0]||'без кода')}</span></div>`).join(''):'<p class="hint">Пока пусто. Отсканируйте первую игру.</p>';
+  $('list').querySelectorAll('.item').forEach(e=>e.onclick=()=>{showGame(D.games[e.dataset.id]);scrollTo(0,0)});
 }
+
+/* дубли */
+let dgroups=[];
+function findDups(){
+  const f=$('dmode').value==='f',kf=f?keyF:keyS,m=new Map();
+  Object.values(D.games).forEach(g=>{const k=kf(g);if(!k.startsWith('|')){if(!m.has(k))m.set(k,[]);m.get(k).push(g)}});
+  dgroups=[...m.entries()].filter(([k,a])=>a.length>1&&!D.ignore[(f?'f:':'s:')+k]).map(([k,a])=>({k:(f?'f:':'s:')+k,a}));
+  $('dall').hidden=f||!dgroups.length;
+  $('dups').innerHTML=dgroups.length?`<p class="hint">Групп дублей: ${dgroups.length}${dgroups.length>50?' (показаны первые 50)':''}</p>`+dgroups.slice(0,50).map((x,i)=>`<div class="grp"><b>${esc(x.a[0].title)}</b><div class="meta">${esc(x.a[0].platform)}</div>${x.a.map(g=>`<div class="meta">• ${esc(g.title)}${g.note?' ['+esc(g.note)+']':''} — ${esc(g.codes.join(', ')||'без кода')}</div>`).join('')}<div class="row" style="margin-top:6px"><button class="main" data-m="${i}">Объединить</button><button data-n="${i}">Это не дубль</button></div></div>`).join(''):'<p class="hint">Дублей не найдено.</p>';
+  $('dups').querySelectorAll('[data-m]').forEach(b=>b.onclick=()=>{merge(dgroups[b.dataset.m].a);persist();render();findDups();toast('Объединено')});
+  $('dups').querySelectorAll('[data-n]').forEach(b=>b.onclick=()=>{D.ignore[dgroups[b.dataset.n].k]=1;persist();findDups()});
+}
+$('dfind').onclick=findDups;
+$('dall').onclick=()=>{if(!confirm('Объединить все строгие совпадения ('+dgroups.length+' групп)?'))return;dgroups.forEach(x=>merge(x.a));persist();render();findDups();toast('Готово')};
 
 /* camera */
 let stream=null,running=false;
@@ -200,6 +291,114 @@ function loadZX(){
 function stopCam(){running=false;if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;$('video').hidden=true;$('cam').textContent='Камера'}
 $('cam').onclick=()=>running?stopCam():startCam();
 
+/* ---- приёмка ---- */
+const IK='gamedb_intake';
+let intake=[];try{intake=JSON.parse(localStorage.getItem(IK)||'[]')}catch(e){}
+const saveIntake=()=>{try{localStorage.setItem(IK,JSON.stringify(intake))}catch(e){toast('Не удалось сохранить список')}};
+function addIntake(g,n){const x=intake.find(i=>i.id===g.id);if(x)x.qty+=n||1;else intake.push({id:g.id,title:g.title,platform:g.platform,qty:n||1});saveIntake();renderIntake()}
+function renderIntake(){
+  $('itot').textContent=intake.reduce((a,i)=>a+i.qty,0)+' шт, '+intake.length+' позиций';
+  $('ilist').innerHTML=intake.length?intake.map((i,k)=>`<div class="item" style="cursor:default"><div><b>${esc(i.title)}</b><span>${esc(i.platform)}</span></div><div class="row" style="flex-wrap:nowrap"><button data-d="${k}">−</button><b style="align-self:center">${i.qty}</b><button data-p="${k}">+</button></div></div>`).join(''):'<p class="hint">Список пуст.</p>';
+  $('ilist').querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>{const i=intake[b.dataset.d];if(--i.qty<=0)intake.splice(b.dataset.d,1);saveIntake();renderIntake()});
+  $('ilist').querySelectorAll('[data-p]').forEach(b=>b.onclick=()=>{intake[b.dataset.p].qty++;saveIntake();renderIntake()});
+}
+$('iclr').onclick=()=>{if(intake.length&&confirm('Очистить список приёмки?')){intake=[];saveIntake();renderIntake()}};
+$('icopy').onclick=async()=>{const t=intake.map(i=>`${i.title} (${i.platform}) × ${i.qty}`).join('\n');try{await navigator.clipboard.writeText(t);toast('Скопировано')}catch(e){toast('Не удалось скопировать')}};
+
+/* ---- фото: распознавание текста (Yandex Vision OCR через прокси) ---- */
+function fileToJpeg(file,max){return new Promise((ok,fail)=>{const im=new Image(),u=URL.createObjectURL(file);im.onload=()=>{const k=Math.min(1,max/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);c.getContext('2d').drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(u);ok(c.toDataURL('image/jpeg',0.85).split(',')[1])};im.onerror=()=>fail(new Error('не удалось открыть фото'));im.src=u})}
+function ocrLines(j){
+  const ta=(j.result&&j.result.textAnnotation)||j.textAnnotation||{},out=[];
+  (ta.blocks||[]).forEach(b=>(b.lines||[]).forEach(l=>{
+    const v=(l.boundingBox&&l.boundingBox.vertices)||[];if(!v.length||!l.text)return;
+    const xs=v.map(p=>+p.x||0),ys=v.map(p=>+p.y||0);
+    out.push({t:l.text,x0:Math.min(...xs),x1:Math.max(...xs),y0:Math.min(...ys),y1:Math.max(...ys)});
+  }));
+  return out;
+}
+function platFromText(t){
+  const m=t.match(/\bp\s?[s5]\s?([45])\b/i);if(m)return m[1]==='4'?'PlayStation 4':'PlayStation 5';
+  if(/xbox series/i.test(t))return 'Xbox Series X';if(/xbox one/i.test(t))return 'Xbox One';if(/xbox 360/i.test(t))return 'Xbox 360';
+  if(/switch ?2/i.test(t))return 'Nintendo Switch 2';if(/switch/i.test(t))return 'Nintendo Switch';return '';
+}
+const cleanT=t=>t.replace(/\b(CUSA|PPSA)\s?\d+\b/gi,' ').replace(/\bp\s?[s5]\s?[45]\b/gi,' ').replace(/\s+/g,' ').trim();
+function buildItems(L){
+  L=L.map(l=>({...l,cy:(l.y0+l.y1)/2,h:l.y1-l.y0,plat:platFromText(l.t),txt:cleanT(l.t)}));
+  const isMk=l=>l.plat&&l.txt.replace(/[^\p{L}]/gu,'').length<3;
+  const mk=L.filter(isMk),hs=mk.map(l=>l.h).sort((a,b)=>a-b),tol=Math.max(20,(hs[hs.length>>1]||20)*1.3);
+  const rows=mk.map(m=>({cy:m.cy,x:m.x0,plat:m.plat,parts:[]})),free=[];
+  L.filter(l=>!isMk(l)&&l.txt.replace(/[^\p{L}]/gu,'').length>=3).forEach(l=>{
+    let best=null,bd=1e9;
+    rows.forEach(r=>{const dy=Math.abs(r.cy-l.cy);if(dy<=tol&&l.x0>=r.x-5){const d=dy+(l.x0-r.x)*0.001;if(d<bd){bd=d;best=r}}});
+    if(best)best.parts.push(l);else free.push(l);
+  });
+  const out=rows.filter(r=>r.parts.length).sort((a,b)=>a.cy-b.cy).map(r=>({text:r.parts.sort((a,b)=>a.x0-b.x0).map(l=>l.txt).join(' '),plat:r.plat}));
+  free.sort((a,b)=>a.cy-b.cy);const cl=[];
+  free.forEach(l=>{const c=cl.find(c=>Math.abs(c.cy-l.cy)<=tol);if(c)c.p.push(l);else cl.push({cy:l.cy,p:[l]})});
+  cl.forEach(c=>{c.p.sort((a,b)=>a.x0-b.x0);out.push({text:c.p.map(l=>l.txt).join(' '),plat:(c.p.find(l=>l.plat)||{}).plat||''})});
+  return out;
+}
+const bgs=s=>{const a=strip(s),r=new Set();for(let i=0;i<a.length-1;i++)r.add(a.slice(i,i+2));return r};
+const bgCache=new Map();
+const gbg=g=>{let r=bgCache.get(g.id);if(!r||r.t!==g.title){r={t:g.title,s:bgs(g.title.replace(/\([^)]*\)/g,''))};bgCache.set(g.id,r)}return r.s};
+function matches(text,plat){
+  const q=bgs(text),res=[];if(!q.size)return res;
+  Object.values(D.games).forEach(g=>{
+    if(plat&&g.platform!==plat)return;
+    const b=gbg(g);if(!b.size)return;let n=0;q.forEach(x=>{if(b.has(x))n++});
+    const s=0.6*(2*n/(q.size+b.size))+0.4*(n/q.size);
+    if(s>0.4)res.push([s,g]);
+  });
+  return res.sort((a,b)=>b[0]-a[0]).slice(0,3);
+}
+let batch=[];
+function drawRow(d,it,i){
+  it.m=matches(it.text,it.plat);
+  if(it.sel===undefined)it.sel=it.m.length&&it.m[0][0]>=0.6?it.m[0][1].id:'skip';
+  const rad=(v,lbl)=>`<label class="meta" style="display:block;margin-top:3px"><input type="radio" name="m${i}" value="${v}"${it.sel===v?' checked':''}> ${lbl}</label>`;
+  d.innerHTML=`<div class="row"><input value="${esc(it.text)}" data-f="t" style="flex:1 1 150px"><select data-f="p"><option value="">Платформа?</option>${opts(PLATFORMS,it.plat)}</select></div>`+
+    it.m.map(([sc,g])=>rad(g.id,`${esc(g.title)} · ${esc(g.platform)} · ${Math.round(sc*100)}%`)).join('')+rad('new','Новая игра с этим названием')+rad('skip','Пропустить');
+  d.querySelector('[data-f=t]').onchange=e=>{it.text=e.target.value.trim();it.sel=undefined;drawRow(d,it,i)};
+  d.querySelector('[data-f=p]').onchange=e=>{it.plat=e.target.value;it.sel=undefined;drawRow(d,it,i)};
+  d.querySelectorAll('input[type=radio]').forEach(r=>r.onchange=()=>{it.sel=r.value});
+}
+function renderBatch(){
+  if(!batch.length){$('batch').innerHTML='';return}
+  $('batch').innerHTML=`<div class="panel"><h2>Распознано с фото: ${batch.length}</h2><p class="hint">Проверьте каждую строку: ответ можно поправить, платформу выбрать, а при плохом совпадении выбрать «Новая игра» или «Пропустить».</p><div id="brows"></div><div class="row" style="margin-top:10px"><button class="main" id="bgo">Добавить выбранные в приёмку</button><button id="bclr">Очистить</button></div></div>`;
+  batch.forEach((it,i)=>{const d=document.createElement('div');d.className='grp';$('brows').appendChild(d);drawRow(d,it,i)});
+  $('bclr').onclick=()=>{batch=[];renderBatch()};
+  $('bgo').onclick=()=>{
+    for(const it of batch){if(it.sel==='new'&&(!it.plat||!it.text)){toast('Для новой игры укажите название и платформу: «'+(it.text||'?')+'»');return}}
+    let n=0;
+    batch.forEach(it=>{
+      if(it.sel==='skip'||it.sel===undefined)return;
+      let g=D.games[it.sel];
+      if(it.sel==='new'){g={id:uid(),title:it.text,platform:it.plat,region:'Другое',note:'',added:new Date().toISOString().slice(0,10),codes:[]};D.games[g.id]=g}
+      if(g){addIntake(g,1);n++}
+    });
+    persist();render();batch=[];renderBatch();toast('Добавлено в приёмку: '+n);
+  };
+}
+$('photo').onclick=()=>$('pfile').click();
+$('pfile').onchange=async e=>{
+  const files=[...e.target.files];e.target.value='';
+  if(!files.length)return;
+  if(!proxyUrl()){toast('Сначала укажите адрес прокси в настройках');return}
+  for(const f of files){
+    $('result').innerHTML='<div class="panel miss"><div class="status warn">Распознаю фото…</div></div>';
+    try{
+      const b=await fileToJpeg(f,2200);
+      const r=await fetch(proxyUrl().replace(/\/+$/,'')+'/ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mimeType:'JPEG',languageCodes:['ru','en'],model:'page',content:b})});
+      if(!r.ok){let m='';try{m=(await r.text()).slice(0,120)}catch(x){}throw new Error('ответ '+r.status+' '+m)}
+      const items=buildItems(ocrLines(await r.json()));
+      if(!items.length)toast('Текст на фото не найден');
+      batch=batch.concat(items);
+    }catch(err){toast('Не удалось распознать: '+err.message)}
+  }
+  $('result').innerHTML='';renderBatch();
+};
+renderIntake();
+
 /* csv */
 function csvParse(t){
   const rows=[];let row=[],f='',q=false;
@@ -215,19 +414,26 @@ function csvParse(t){
 $('exp').onclick=()=>{
   const q=s=>'"'+String(s==null?'':s).replace(/"/g,'""')+'"';
   const lines=['Код,Название,Платформа,Регион,Заметка,Добавлено'];
-  Object.values(db).forEach(g=>lines.push([q('="'+g.code+'"'),q(g.title),q(g.platform),q(g.region),q(g.note),q(g.added)].join(',')));
+  Object.values(D.games).forEach(g=>g.codes.forEach(c=>lines.push([q('="'+c+'"'),q(g.title),q(g.platform),q(g.region),q(g.note),q(g.added)].join(','))));
   const b=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='games-db.csv';a.click();
 };
 $('imp').onclick=()=>$('file').click();
 $('file').onchange=async e=>{
   const f=e.target.files[0];if(!f)return;
-  const rows=csvParse(await f.text());let n=0;
+  const rows=csvParse(await f.text());
+  const idx=new Map();Object.values(D.games).forEach(g=>idx.set(keyS(g),g));
+  let nw=0,att=0,skip=0;
   rows.slice(1).forEach(r=>{
-    const code=String(r[0]||'').replace(/\D/g,'');
-    if(code.length>=7&&r[1]){db[norm(code)]={code,title:r[1],platform:r[2]||'Другое',region:r[3]||'PAL',note:r[4]||'',added:r[5]||''};n++}
+    const code=String(r[0]||'').replace(/\D/g,''),title=(r[1]||'').trim();
+    if(code.length<7||!title)return;
+    if(D.codes[norm(code)]){skip++;return}
+    const pf=r[2]||'Другое',key=strip(title)+'|'+pf;
+    let g=idx.get(key);
+    if(g){attach(g,code);att++}
+    else{g={id:uid(),title,platform:pf,region:r[3]||'PAL',note:r[4]||'',added:r[5]||'',codes:[]};D.games[g.id]=g;idx.set(key,g);attach(g,code);nw++}
   });
-  persist();render();toast('Импортировано записей: '+n);e.target.value='';
+  persist();render();toast(`Новых игр: ${nw}, привязано кодов к существующим: ${att}, уже были: ${skip}`);e.target.value='';
 };
 
 $('proxy').value=proxyUrl();
