@@ -53,6 +53,11 @@ video{width:100%;max-height:300px;background:#000;border-radius:8px;margin-top:1
   <p class="hint">USB-сканер работает как клавиатура: наведите курсор в поле и сканируйте. Онлайн-поиск <label><input type="checkbox" id="onl" checked> включён</label></p>
 </div>
 
+<details class="panel" id="set"><summary>Настройка онлайн-поиска</summary>
+  <div class="row" style="margin-top:10px"><input id="proxy" placeholder="https://имя.аккаунт.workers.dev" style="flex:1 1 220px"><button id="psave">Сохранить</button></div>
+  <p class="hint">Адрес вашего прокси на Cloudflare Workers. Без него онлайн-поиск не работает.</p>
+</details>
+
 <div id="result"></div>
 
 <div class="panel">
@@ -69,17 +74,19 @@ video{width:100%;max-height:300px;background:#000;border-radius:8px;margin-top:1
 
 <script>
 const KEY='gamedb_v1';
-const PLATFORMS=['PlayStation 1','PlayStation 2','PlayStation 3','PlayStation 4','PlayStation 5','PS Vita','PSP','Xbox','Xbox 360','Xbox One','Xbox Series X','Nintendo Switch','Wii','Wii U','GameCube','Nintendo 64','SNES','NES','Nintendo DS','Nintendo 3DS','Game Boy / GBA','Sega','ПК','Другое'];
+const PLATFORMS=['PlayStation 1','PlayStation 2','PlayStation 3','PlayStation 4','PlayStation 5','PS Vita','PSP','Xbox','Xbox 360','Xbox One','Xbox Series X','Nintendo Switch','Nintendo Switch 2','Wii','Wii U','GameCube','Nintendo 64','SNES','NES','Nintendo DS','Nintendo 3DS','Game Boy / GBA','Sega','ПК','Другое'];
 const REGIONS=['PAL','NTSC-U (США)','NTSC-J (Япония)','Россия','Другое'];
-const GUESS=[[/switch/i,'Nintendo Switch'],[/ps5|playstation ?5/i,'PlayStation 5'],[/ps4|playstation ?4/i,'PlayStation 4'],[/ps3|playstation ?3/i,'PlayStation 3'],[/ps2|playstation ?2/i,'PlayStation 2'],[/xbox series/i,'Xbox Series X'],[/xbox one/i,'Xbox One'],[/xbox 360/i,'Xbox 360'],[/wii u/i,'Wii U'],[/\bwii\b/i,'Wii'],[/3ds/i,'Nintendo 3DS'],[/\bds\b/i,'Nintendo DS'],[/\bpsp\b/i,'PSP'],[/vita/i,'PS Vita'],[/\bpc\b|windows/i,'ПК']];
+const GUESS=[[/switch ?2/i,'Nintendo Switch 2'],[/switch/i,'Nintendo Switch'],[/ps5|playstation ?5/i,'PlayStation 5'],[/ps4|playstation ?4/i,'PlayStation 4'],[/ps3|playstation ?3/i,'PlayStation 3'],[/ps2|playstation ?2/i,'PlayStation 2'],[/xbox series/i,'Xbox Series X'],[/xbox one/i,'Xbox One'],[/xbox 360/i,'Xbox 360'],[/wii u/i,'Wii U'],[/\bwii\b/i,'Wii'],[/3ds/i,'Nintendo 3DS'],[/\bds\b/i,'Nintendo DS'],[/\bpsp\b/i,'PSP'],[/vita/i,'PS Vita'],[/\bpc\b|windows/i,'ПК']];
 
 let db={};
 try{db=JSON.parse(localStorage.getItem(KEY)||'{}')}catch(e){db={}}
+const norm=c=>String(c).replace(/\D/g,'').padStart(14,'0');
+(function(){const n={};Object.values(db).forEach(g=>{n[norm(g.code)]=g});db=n})();
 const $=id=>document.getElementById(id);
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function persist(){try{localStorage.setItem(KEY,JSON.stringify(db))}catch(e){toast('Не удалось сохранить в браузере')}}
 function toast(t){const e=$('toast');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),2500)}
-function find(c){const v=[c,c.length==13&&c[0]=='0'?c.slice(1):null,c.length==12?'0'+c:null];for(const k of v){if(k&&db[k])return db[k]}return null}
+function find(c){return db[norm(c)]||null}
 function guess(t){for(const [r,p] of GUESS)if(r.test(t||''))return p;return ''}
 const opts=(a,sel)=>a.map(x=>`<option${x===sel?' selected':''}>${esc(x)}</option>`).join('');
 
@@ -90,7 +97,7 @@ function showFound(g){
   <div class="meta">Код ${esc(g.code)}</div>
   <div class="row" style="margin-top:10px"><button id="ed">Изменить</button><button class="danger" id="del">Удалить</button></div></div>`;
   $('ed').onclick=()=>showForm(g.code,g,'Редактирование','warn');
-  $('del').onclick=()=>{if(confirm('Удалить запись?')){delete db[g.code];persist();render();$('result').innerHTML='';toast('Удалено')}};
+  $('del').onclick=()=>{if(confirm('Удалить запись?')){delete db[norm(g.code)];persist();render();$('result').innerHTML='';toast('Удалено')}};
 }
 function showForm(code,pre,msg,cls){
   pre=pre||{};
@@ -108,12 +115,17 @@ function showForm(code,pre,msg,cls){
     const title=$('f_t').value.trim(),platform=$('f_p').value;
     if(!title||!platform){toast('Укажите название и платформу');return}
     const g={code,title,platform,region:$('f_r').value,note:$('f_n').value.trim(),added:pre.added||new Date().toISOString().slice(0,10)};
-    db[code]=g;persist();render();showFound(g);toast('Сохранено');$('code').focus();
+    db[norm(code)]=g;persist();render();showFound(g);toast('Сохранено');$('code').focus();
   };
   $('f_t').focus();
 }
+const PK='gamedb_proxy';
+function proxyUrl(){try{return localStorage.getItem(PK)||''}catch(e){return ''}}
 async function online(code){
-  const r=await fetch('https://api.upcitemdb.com/prod/trial/lookup?upc='+code);
+  const p=proxyUrl();
+  if(!p)throw new Error('не указан адрес прокси в настройках');
+  const r=await fetch(p.replace(/\/+$/,'')+'/?upc='+code);
+  if(r.status==429)throw new Error('дневной лимит бесплатного поиска исчерпан');
   if(!r.ok)throw new Error('ответ '+r.status);
   const j=await r.json();const it=(j.items||[])[0];
   return it?it.title:null;
@@ -141,7 +153,7 @@ function render(){
   $('count').textContent=all.length;
   const v=all.filter(g=>!q||(g.title+' '+g.platform+' '+g.code).toLowerCase().includes(q)).slice(0,200);
   $('list').innerHTML=v.length?v.map(g=>`<div class="item" data-c="${esc(g.code)}"><div><b>${esc(g.title)}</b><span>${esc(g.code)}</span></div><span>${esc(g.platform)}</span></div>`).join(''):'<p class="hint">Пока пусто. Отсканируйте первую игру.</p>';
-  $('list').querySelectorAll('.item').forEach(e=>e.onclick=()=>{showFound(db[e.dataset.c]);scrollTo(0,0)});
+  $('list').querySelectorAll('.item').forEach(e=>e.onclick=()=>{showFound(db[norm(e.dataset.c)]);scrollTo(0,0)});
 }
 
 /* camera */
@@ -213,11 +225,15 @@ $('file').onchange=async e=>{
   const rows=csvParse(await f.text());let n=0;
   rows.slice(1).forEach(r=>{
     const code=String(r[0]||'').replace(/\D/g,'');
-    if(code.length>=8&&r[1]){db[code]={code,title:r[1],platform:r[2]||'Другое',region:r[3]||'PAL',note:r[4]||'',added:r[5]||''};n++}
+    if(code.length>=7&&r[1]){db[norm(code)]={code,title:r[1],platform:r[2]||'Другое',region:r[3]||'PAL',note:r[4]||'',added:r[5]||''};n++}
   });
   persist();render();toast('Импортировано записей: '+n);e.target.value='';
 };
 
+$('proxy').value=proxyUrl();
+$('psave').onclick=()=>{
+  try{localStorage.setItem(PK,$('proxy').value.trim());toast('Адрес сохранён')}catch(e){toast('Не удалось сохранить')}
+};
 $('go').onclick=()=>handle($('code').value);
 $('code').addEventListener('keydown',e=>{if(e.key==='Enter')handle($('code').value)});
 $('q').oninput=render;
