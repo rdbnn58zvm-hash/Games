@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Игры по штрихкоду</title>
+<style>
+:root{--bg:#eceff2;--panel:#fff;--ink:#14202b;--mute:#58656f;--line:#cfd7de;--acc:#0b5fd1;--accink:#fff;--ok:#0f7a49;--warn:#9a5600;--bad:#b3261e}
+@media (prefers-color-scheme:dark){:root{--bg:#0f151b;--panel:#18222b;--ink:#e8eef3;--mute:#93a1ae;--line:#2b3742;--acc:#5aa0ff;--accink:#07111c;--ok:#4cc28a;--warn:#e8a04a;--bad:#ff8a80}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:16px;max-width:760px;margin:0 auto}
+h1{font-size:1.35rem;margin:0 0 12px;font-weight:700}
+h2{font-size:1.05rem;margin:0 0 10px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+input,select,button{font:inherit;color:inherit}
+input,select{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-width:0}
+input:focus,select:focus,button:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+#code{flex:1 1 200px;font-size:1.25rem;letter-spacing:.04em}
+button{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:10px 14px;cursor:pointer}
+button.main{background:var(--acc);color:var(--accink);border-color:var(--acc);font-weight:600}
+button.danger{color:var(--bad)}
+.hint{color:var(--mute);font-size:.9rem;margin:8px 0 0}
+.found{border-left:5px solid var(--ok)}
+.miss{border-left:5px solid var(--warn)}
+.title{font-size:1.3rem;font-weight:700;margin:2px 0}
+.meta{color:var(--mute)}
+.status{font-weight:600;margin-bottom:6px}
+.ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+.form{display:grid;gap:8px;margin-top:8px}
+.form label{display:grid;gap:3px;font-size:.9rem;color:var(--mute)}
+.form input,.form select{color:var(--ink)}
+.item{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-top:1px solid var(--line);cursor:pointer}
+.item:first-child{border-top:0}
+.item b{display:block}
+.item span{color:var(--mute);font-size:.9rem;white-space:nowrap}
+video{width:100%;max-height:300px;background:#000;border-radius:8px;margin-top:10px}
+#toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;opacity:0;pointer-events:none;transition:opacity .2s}
+#toast.on{opacity:1}
+</style>
+</head>
+<body>
+<h1>Игры по штрихкоду</h1>
+
+<div class="panel">
+  <div class="row">
+    <input id="code" inputmode="numeric" autocomplete="off" placeholder="Штрихкод: отсканируйте или введите" autofocus>
+    <button class="main" id="go">Найти</button>
+    <button id="cam">Камера</button>
+  </div>
+  <video id="video" playsinline muted hidden></video>
+  <p class="hint">USB-сканер работает как клавиатура: наведите курсор в поле и сканируйте. Онлайн-поиск <label><input type="checkbox" id="onl" checked> включён</label></p>
+</div>
+
+<div id="result"></div>
+
+<div class="panel">
+  <h2>Ваша база: <span id="count">0</span></h2>
+  <div class="row">
+    <input id="q" placeholder="Поиск по названию, платформе или коду" style="flex:1 1 200px">
+    <button id="exp">Экспорт CSV</button>
+    <button id="imp">Импорт CSV</button>
+    <input type="file" id="file" accept=".csv,text/csv" hidden>
+  </div>
+  <div id="list" style="margin-top:8px"></div>
+</div>
+<div id="toast"></div>
+
+<script>
+const KEY='gamedb_v1';
+const PLATFORMS=['PlayStation 1','PlayStation 2','PlayStation 3','PlayStation 4','PlayStation 5','PS Vita','PSP','Xbox','Xbox 360','Xbox One','Xbox Series X','Nintendo Switch','Wii','Wii U','GameCube','Nintendo 64','SNES','NES','Nintendo DS','Nintendo 3DS','Game Boy / GBA','Sega','ПК','Другое'];
+const REGIONS=['PAL','NTSC-U (США)','NTSC-J (Япония)','Россия','Другое'];
+const GUESS=[[/switch/i,'Nintendo Switch'],[/ps5|playstation ?5/i,'PlayStation 5'],[/ps4|playstation ?4/i,'PlayStation 4'],[/ps3|playstation ?3/i,'PlayStation 3'],[/ps2|playstation ?2/i,'PlayStation 2'],[/xbox series/i,'Xbox Series X'],[/xbox one/i,'Xbox One'],[/xbox 360/i,'Xbox 360'],[/wii u/i,'Wii U'],[/\bwii\b/i,'Wii'],[/3ds/i,'Nintendo 3DS'],[/\bds\b/i,'Nintendo DS'],[/\bpsp\b/i,'PSP'],[/vita/i,'PS Vita'],[/\bpc\b|windows/i,'ПК']];
+
+let db={};
+try{db=JSON.parse(localStorage.getItem(KEY)||'{}')}catch(e){db={}}
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(db))}catch(e){toast('Не удалось сохранить в браузере')}}
+function toast(t){const e=$('toast');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),2500)}
+function find(c){const v=[c,c.length==13&&c[0]=='0'?c.slice(1):null,c.length==12?'0'+c:null];for(const k of v){if(k&&db[k])return db[k]}return null}
+function guess(t){for(const [r,p] of GUESS)if(r.test(t||''))return p;return ''}
+const opts=(a,sel)=>a.map(x=>`<option${x===sel?' selected':''}>${esc(x)}</option>`).join('');
+
+function showFound(g){
+  $('result').innerHTML=`<div class="panel found"><div class="status ok">Найдено в вашей базе</div>
+  <div class="title">${esc(g.title)}</div>
+  <div class="meta">${esc(g.platform)} · ${esc(g.region)}${g.note?' · '+esc(g.note):''}</div>
+  <div class="meta">Код ${esc(g.code)}</div>
+  <div class="row" style="margin-top:10px"><button id="ed">Изменить</button><button class="danger" id="del">Удалить</button></div></div>`;
+  $('ed').onclick=()=>showForm(g.code,g,'Редактирование','warn');
+  $('del').onclick=()=>{if(confirm('Удалить запись?')){delete db[g.code];persist();render();$('result').innerHTML='';toast('Удалено')}};
+}
+function showForm(code,pre,msg,cls){
+  pre=pre||{};
+  const plat=pre.platform||guess(pre.title);
+  $('result').innerHTML=`<div class="panel miss"><div class="status ${cls||'warn'}">${esc(msg)}</div>
+  <div class="meta">Код ${esc(code)}</div>
+  <div class="form">
+   <label>Название<input id="f_t" value="${esc(pre.title||'')}"></label>
+   <label>Платформа<select id="f_p"><option value="">— выберите —</option>${opts(PLATFORMS,plat)}</select></label>
+   <label>Регион<select id="f_r">${opts(REGIONS,pre.region||'PAL')}</select></label>
+   <label>Заметка (издание, язык, комплектность)<input id="f_n" value="${esc(pre.note||'')}"></label>
+   <div class="row"><button class="main" id="sv">Сохранить в базу</button></div>
+  </div></div>`;
+  $('sv').onclick=()=>{
+    const title=$('f_t').value.trim(),platform=$('f_p').value;
+    if(!title||!platform){toast('Укажите название и платформу');return}
+    const g={code,title,platform,region:$('f_r').value,note:$('f_n').value.trim(),added:pre.added||new Date().toISOString().slice(0,10)};
+    db[code]=g;persist();render();showFound(g);toast('Сохранено');$('code').focus();
+  };
+  $('f_t').focus();
+}
+async function online(code){
+  const r=await fetch('https://api.upcitemdb.com/prod/trial/lookup?upc='+code);
+  if(!r.ok)throw new Error('ответ '+r.status);
+  const j=await r.json();const it=(j.items||[])[0];
+  return it?it.title:null;
+}
+async function handle(raw){
+  const code=String(raw).replace(/\D/g,'');
+  $('code').value='';
+  if(code.length<8){toast('Штрихкод слишком короткий');return}
+  const g=find(code);
+  if(g){showFound(g);return}
+  if(!$('onl').checked){showForm(code,{},'Нет в вашей базе. Введите данные вручную.');return}
+  $('result').innerHTML='<div class="panel miss"><div class="status warn">Ищу в онлайн-базе…</div></div>';
+  try{
+    const t=await online(code);
+    if(t)showForm(code,{title:t},'Найдено онлайн. Проверьте название и платформу.','ok');
+    else showForm(code,{},'Нет ни в вашей базе, ни онлайн. Введите вручную.');
+  }catch(e){
+    showForm(code,{},'Онлайн-поиск недоступен ('+e.message+'). Введите вручную.','bad');
+  }
+}
+
+function render(){
+  const q=$('q').value.trim().toLowerCase();
+  const all=Object.values(db).sort((a,b)=>a.title.localeCompare(b.title,'ru'));
+  $('count').textContent=all.length;
+  const v=all.filter(g=>!q||(g.title+' '+g.platform+' '+g.code).toLowerCase().includes(q)).slice(0,200);
+  $('list').innerHTML=v.length?v.map(g=>`<div class="item" data-c="${esc(g.code)}"><div><b>${esc(g.title)}</b><span>${esc(g.code)}</span></div><span>${esc(g.platform)}</span></div>`).join(''):'<p class="hint">Пока пусто. Отсканируйте первую игру.</p>';
+  $('list').querySelectorAll('.item').forEach(e=>e.onclick=()=>{showFound(db[e.dataset.c]);scrollTo(0,0)});
+}
+
+/* camera */
+let stream=null,running=false;
+async function startCam(){
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1280}}});
+  }catch(e){toast('Нет доступа к камере (нужен https или localhost)');return}
+  const v=$('video');v.srcObject=stream;v.hidden=false;await v.play();
+  let decode;
+  if('BarcodeDetector' in window){
+    const det=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e']});
+    decode=async()=>{const r=await det.detect(v);return r.length?r[0].rawValue:null};
+  }else{
+    try{await loadZX()}catch(e){toast('Не удалось загрузить сканер. Нужен интернет.');stopCam();return}
+    const hints=new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.EAN_8,ZXing.BarcodeFormat.UPC_A,ZXing.BarcodeFormat.UPC_E]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
+    const rd=new ZXing.MultiFormatReader();rd.setHints(hints);
+    const cv=document.createElement('canvas');
+    decode=async()=>{
+      if(!v.videoWidth)return null;
+      cv.width=v.videoWidth;cv.height=v.videoHeight;
+      cv.getContext('2d',{willReadFrequently:true}).drawImage(v,0,0);
+      try{return rd.decode(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(cv)))).getText()}
+      catch(e){return null}
+    };
+  }
+  running=true;$('cam').textContent='Закрыть камеру';
+  const tick=async()=>{
+    if(!running)return;
+    try{const t=await decode();if(t){stopCam();handle(t);return}}catch(e){}
+    setTimeout(tick,150);
+  };tick();
+}
+function loadZX(){
+  return new Promise((ok,fail)=>{
+    if(window.ZXing)return ok();
+    const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
+    s.onload=ok;s.onerror=fail;document.head.appendChild(s);
+  });
+}
+function stopCam(){running=false;if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;$('video').hidden=true;$('cam').textContent='Камера'}
+$('cam').onclick=()=>running?stopCam():startCam();
+
+/* csv */
+function csvParse(t){
+  const rows=[];let row=[],f='',q=false;
+  for(let i=0;i<t.length;i++){const c=t[i];
+    if(q){if(c=='"'){if(t[i+1]=='"'){f+='"';i++}else q=false}else f+=c}
+    else if(c=='"')q=true;
+    else if(c==','||c==';'){row.push(f);f=''}
+    else if(c=='\n'||c=='\r'){if(c=='\r'&&t[i+1]=='\n')i++;row.push(f);rows.push(row);row=[];f=''}
+    else f+=c}
+  if(f||row.length){row.push(f);rows.push(row)}
+  return rows;
+}
+$('exp').onclick=()=>{
+  const q=s=>'"'+String(s==null?'':s).replace(/"/g,'""')+'"';
+  const lines=['Код,Название,Платформа,Регион,Заметка,Добавлено'];
+  Object.values(db).forEach(g=>lines.push([q('="'+g.code+'"'),q(g.title),q(g.platform),q(g.region),q(g.note),q(g.added)].join(',')));
+  const b=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='games-db.csv';a.click();
+};
+$('imp').onclick=()=>$('file').click();
+$('file').onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  const rows=csvParse(await f.text());let n=0;
+  rows.slice(1).forEach(r=>{
+    const code=String(r[0]||'').replace(/\D/g,'');
+    if(code.length>=8&&r[1]){db[code]={code,title:r[1],platform:r[2]||'Другое',region:r[3]||'PAL',note:r[4]||'',added:r[5]||''};n++}
+  });
+  persist();render();toast('Импортировано записей: '+n);e.target.value='';
+};
+
+$('go').onclick=()=>handle($('code').value);
+$('code').addEventListener('keydown',e=>{if(e.key==='Enter')handle($('code').value)});
+$('q').oninput=render;
+render();
+</script>
+</body>
+</html>
